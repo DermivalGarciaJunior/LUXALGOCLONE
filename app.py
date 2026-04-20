@@ -1,78 +1,46 @@
 import streamlit as st
-import time
 
 st.set_page_config(page_title="LuxAlgoClone", layout="wide")
 
 # =========================
-# DEBUG INICIAL
+# INÍCIO
 # =========================
 st.write("🚀 INICIANDO APLICAÇÃO...")
-time.sleep(1)
-
-st.write("⚙️ Carregando bibliotecas...")
-time.sleep(1)
+st.write("📊 Carregando gráfico TradingView...")
 
 # =========================
-# TESTE DE IMPORTS
+# WIDGET TRADINGVIEW
 # =========================
-try:
-    import ccxt
-    st.write("✅ CCXT carregado")
-except Exception as e:
-    st.error(f"❌ Erro ao carregar CCXT: {e}")
-    st.stop()
+tradingview_widget = """
+<!-- TradingView Widget BEGIN -->
+<div class="tradingview-widget-container">
+  <div id="tradingview_chart"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script type="text/javascript">
+  new TradingView.widget({
+    "width": "100%",
+    "height": 600,
+    "symbol": "BINANCE:AVAXUSDT",
+    "interval": "15",
+    "timezone": "Etc/UTC",
+    "theme": "dark",
+    "style": "1",
+    "locale": "pt",
+    "toolbar_bg": "#0e1117",
+    "enable_publishing": false,
+    "hide_side_toolbar": false,
+    "allow_symbol_change": true,
+    "container_id": "tradingview_chart"
+  });
+  </script>
+</div>
+<!-- TradingView Widget END -->
+"""
 
-try:
-    import pandas as pd
-    st.write("✅ Pandas carregado")
-except Exception as e:
-    st.error(f"❌ Erro ao carregar Pandas: {e}")
-    st.stop()
-
-# =========================
-# TESTE BINANCE
-# =========================
-st.write("🌐 Conectando na Binance...")
-time.sleep(1)
-
-try:
-    exchange = ccxt.binance({
-        "enableRateLimit": True,
-        "timeout": 10000,
-    })
-    st.write("✅ Conexão criada")
-except Exception as e:
-    st.error(f"❌ Erro ao criar conexão: {e}")
-    st.stop()
-
-# =========================
-# TESTE FETCH
-# =========================
-st.write("📡 Buscando dados...")
-time.sleep(1)
-
-try:
-    candles = exchange.fetch_ohlcv("AVAX/USDT", timeframe="15m", limit=10)
-    st.write("✅ Dados recebidos da Binance")
-except Exception as e:
-    st.error(f"❌ Erro ao buscar dados: {e}")
-    st.stop()
-
-# =========================
-# TESTE DATAFRAME
-# =========================
-st.write("📊 Convertendo dados...")
-time.sleep(1)
-
-try:
-    df = pd.DataFrame(candles)
-    st.write("✅ DataFrame criado")
-except Exception as e:
-    st.error(f"❌ Erro no DataFrame: {e}")
-    st.stop()
+st.components.v1.html(tradingview_widget, height=650)
 
 # =========================
 # FINAL
 # =========================
-st.success("🎯 APP FUNCIONANDO ATÉ AQUI")
-st.write(df)
+st.success("🎯 TradingView carregado com sucesso!")
+st.write("Agora seu app funciona sem depender de Binance ou API.")

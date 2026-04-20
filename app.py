@@ -6,277 +6,172 @@ from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="LuxAlgoClone", layout="wide", page_icon="📈")
 
-
 # =========================================
-# CONFIGURAÇÕES
+# CONFIG
 # =========================================
-ATIVO = "AVAX/USD"
 REFRESH_MINUTOS = 3
 REFRESH_MS = REFRESH_MINUTOS * 60 * 1000
-MAX_HISTORICO_PRECO = 50
-MAX_LOGS = 200
-
 
 # =========================================
-# AUTO-REFRESH
+# AUTO REFRESH
 # =========================================
-contador_execucoes = st_autorefresh(
-    interval=REFRESH_MS,
-    key="monitor_refresh",
-)
-
+st_autorefresh(interval=REFRESH_MS, key="refresh")
 
 # =========================================
-# ESTADO INICIAL
+# INPUT DO USUÁRIO
 # =========================================
-def inicializar_estado() -> None:
-    if "historico_precos" not in st.session_state:
-        st.session_state.historico_precos = []
+st.title("🤖 LuxAlgoClone Monitor")
 
-    if "logs_operacoes" not in st.session_state:
-        st.session_state.logs_operacoes = []
+token_input = st.text_input("Digite o token (ex: BTC, ETH, AVAX)", value="AVAX")
+token = token_input.strip().upper()
 
-    if "ultima_acao" not in st.session_state:
-        st.session_state.ultima_acao = "Nenhuma"
+ativo = f"{token}/USDT"
+symbol_tradingview = f"BINANCE:{token}USDT"
 
-    if "status_sinal" not in st.session_state:
-        st.session_state.status_sinal = "AGUARDANDO"
+# =========================================
+# ESTADO
+# =========================================
+if "historico" not in st.session_state:
+    st.session_state.historico = []
 
-    if "posicao_atual" not in st.session_state:
-        st.session_state.posicao_atual = "SEM POSIÇÃO"
+if "logs" not in st.session_state:
+    st.session_state.logs = []
 
-    if "ultimo_preco" not in st.session_state:
-        st.session_state.ultimo_preco = None
-
-    if "ultimo_update" not in st.session_state:
-        st.session_state.ultimo_update = None
-
-    if "erro_monitoramento" not in st.session_state:
-        st.session_state.erro_monitoramento = ""
-
-
-inicializar_estado()
-
+if "posicao" not in st.session_state:
+    st.session_state.posicao = "SEM POSIÇÃO"
 
 # =========================================
 # FUNÇÕES
 # =========================================
-def registrar_log(acao: str, preco: float, detalhe: str) -> None:
-    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    novo = {
-        "Horário": agora,
-        "Preço": round(preco, 4),
+def registrar_log(acao, preco, detalhe):
+    agora = datetime.now().strftime("%H:%M:%S")
+    st.session_state.logs.insert(0, {
+        "Hora": agora,
+        "Token": token,
+        "Preço": round(preco, 6),
         "Ação": acao,
-        "Detalhe": detalhe,
-    }
-    st.session_state.logs_operacoes.insert(0, novo)
-    st.session_state.logs_operacoes = st.session_state.logs_operacoes[:MAX_LOGS]
-
-
-def buscar_preco_avax_usd() -> float:
-    url = "https://api.coingecko.com/api/v3/simple/price"
-    params = {
-        "ids": "avalanche-2",
-        "vs_currencies": "usd",
-    }
-    resposta = requests.get(url, params=params, timeout=20)
-    resposta.raise_for_status()
-
-    dados = resposta.json()
-    preco = dados["avalanche-2"]["usd"]
-    return float(preco)
-
-
-def adicionar_preco_historico(preco: float) -> None:
-    agora = datetime.now()
-    st.session_state.historico_precos.append({
-        "timestamp": agora,
-        "preco": preco,
+        "Detalhe": detalhe
     })
-    st.session_state.historico_precos = st.session_state.historico_precos[-MAX_HISTORICO_PRECO:]
 
+def buscar_preco():
+    # usamos Binance pública via API simples
+    url = f"https://api.binance.com/api/v3/ticker/price?symbol={token}USDT"
+    r = requests.get(url, timeout=10)
+    data = r.json()
 
-def calcular_sinal():
-    historico = st.session_state.historico_precos
+    if "price" not in data:
+        raise Exception("Token não encontrado")
 
-    if len(historico) < 8:
-        return "AGUARDANDO", None, None
-
-    df_hist = pd.DataFrame(historico)
-    media_curta = df_hist["preco"].tail(3).mean()
-    media_longa = df_hist["preco"].tail(8).mean()
-
-    if media_curta > media_longa * 1.001:
-        return "LONG OK", media_curta, media_longa
-
-    if media_curta < media_longa * 0.999:
-        return "SHORT OK", media_curta, media_longa
-
-    return "AGUARDANDO", media_curta, media_longa
-
-
-def processar_monitoramento() -> None:
-    try:
-        preco = buscar_preco_avax_usd()
-        adicionar_preco_historico(preco)
-
-        st.session_state.ultimo_preco = preco
-        st.session_state.ultimo_update = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        st.session_state.erro_monitoramento = ""
-
-        status, media_curta, media_longa = calcular_sinal()
-        st.session_state.status_sinal = status
-
-        detalhe_monitor = "Monitoramento periódico"
-
-        if media_curta is not None and media_longa is not None:
-            detalhe_monitor += f" | MM curta: {media_curta:.4f} | MM longa: {media_longa:.4f}"
-
-        registrar_log("VERIFICAÇÃO", preco, f"{status} | {detalhe_monitor}")
-
-        posicao = st.session_state.posicao_atual
-
-        if posicao == "SEM POSIÇÃO":
-            if status == "LONG OK":
-                st.session_state.posicao_atual = "LONG"
-                st.session_state.ultima_acao = "ENTRADA LONG"
-                registrar_log("ENTRADA", preco, "Sinal LONG confirmado")
-            elif status == "SHORT OK":
-                st.session_state.posicao_atual = "SHORT"
-                st.session_state.ultima_acao = "ENTRADA SHORT"
-                registrar_log("ENTRADA", preco, "Sinal SHORT confirmado")
-            else:
-                st.session_state.ultima_acao = "Aguardando sinal"
-
-        elif posicao == "LONG":
-            if status == "SHORT OK":
-                registrar_log("SAÍDA", preco, "Fechando LONG por reversão")
-                st.session_state.posicao_atual = "SHORT"
-                st.session_state.ultima_acao = "REVERSÃO LONG -> SHORT"
-                registrar_log("ENTRADA", preco, "Nova ENTRADA SHORT por reversão")
-            else:
-                st.session_state.ultima_acao = "LONG mantido"
-
-        elif posicao == "SHORT":
-            if status == "LONG OK":
-                registrar_log("SAÍDA", preco, "Fechando SHORT por reversão")
-                st.session_state.posicao_atual = "LONG"
-                st.session_state.ultima_acao = "REVERSÃO SHORT -> LONG"
-                registrar_log("ENTRADA", preco, "Nova ENTRADA LONG por reversão")
-            else:
-                st.session_state.ultima_acao = "SHORT mantido"
-
-    except Exception as e:
-        st.session_state.erro_monitoramento = str(e)
-        registrar_log("ERRO", st.session_state.ultimo_preco or 0.0, f"Falha no monitoramento: {e}")
-
+    return float(data["price"])
 
 # =========================================
-# EXECUÇÃO DO MONITORAMENTO
+# MONITORAMENTO
 # =========================================
-if contador_execucoes == 0 and not st.session_state.historico_precos:
-    processar_monitoramento()
-elif contador_execucoes > 0:
-    processar_monitoramento()
+try:
+    preco = buscar_preco()
+    st.session_state.historico.append(preco)
+    st.session_state.historico = st.session_state.historico[-20:]
 
+    registrar_log("CHECK", preco, "Monitorando mercado")
 
-# =========================================
-# CABEÇALHO
-# =========================================
-st.title("🤖 LuxAlgoClone Monitor")
-st.caption(f"Atualização automática a cada {REFRESH_MINUTOS} minutos enquanto a página estiver aberta.")
-
-if st.button("🔄 Atualizar agora"):
-    processar_monitoramento()
-    st.rerun()
-
+except Exception as e:
+    st.error(f"Erro: {e}")
+    st.stop()
 
 # =========================================
-# STATUS SUPERIOR
+# SINAL SIMPLES (média)
 # =========================================
-c1, c2, c3, c4 = st.columns(4)
+if len(st.session_state.historico) > 5:
+    media_curta = sum(st.session_state.historico[-3:]) / 3
+    media_longa = sum(st.session_state.historico[-6:]) / 6
 
-with c1:
-    st.metric("Ativo", ATIVO)
-
-with c2:
-    ultimo_preco_fmt = f"${st.session_state.ultimo_preco:,.4f}" if st.session_state.ultimo_preco is not None else "-"
-    st.metric("Último valor", ultimo_preco_fmt)
-
-with c3:
-    st.metric("Sinal atual", st.session_state.status_sinal)
-
-with c4:
-    st.metric("Posição atual", st.session_state.posicao_atual)
-
-
-# =========================================
-# MENSAGENS DE MONITORAMENTO
-# =========================================
-st.subheader("📋 Status do Monitor")
-
-if st.session_state.erro_monitoramento:
-    st.error(f"Erro no monitoramento: {st.session_state.erro_monitoramento}")
+    if media_curta > media_longa:
+        sinal = "LONG 🟢"
+    elif media_curta < media_longa:
+        sinal = "SHORT 🔴"
+    else:
+        sinal = "AGUARDANDO ⚪"
 else:
-    st.info(f"⏰ Última verificação: {st.session_state.ultimo_update or '-'}")
-
-if st.session_state.status_sinal == "LONG OK":
-    st.success("🟢 Sinal LONG OK")
-elif st.session_state.status_sinal == "SHORT OK":
-    st.error("🔴 Sinal SHORT OK")
-else:
-    st.warning("🟡 Aguardando sinal")
-
-st.info(f"📌 Última ação: {st.session_state.ultima_acao}")
-st.info(f"🤖 Situação do bot: {st.session_state.posicao_atual}")
-
+    sinal = "AGUARDANDO ⚪"
 
 # =========================================
-# GRÁFICO TRADINGVIEW
+# DECISÃO
 # =========================================
-st.subheader("📊 Gráfico TradingView")
+if st.session_state.posicao == "SEM POSIÇÃO":
+    if "LONG" in sinal:
+        st.session_state.posicao = "LONG"
+        registrar_log("ENTRADA", preco, "Entrou em LONG")
 
-tradingview_widget = """
+    elif "SHORT" in sinal:
+        st.session_state.posicao = "SHORT"
+        registrar_log("ENTRADA", preco, "Entrou em SHORT")
+
+elif st.session_state.posicao == "LONG":
+    if "SHORT" in sinal:
+        registrar_log("SAÍDA", preco, "Saiu do LONG")
+        st.session_state.posicao = "SHORT"
+        registrar_log("ENTRADA", preco, "Entrou em SHORT")
+
+elif st.session_state.posicao == "SHORT":
+    if "LONG" in sinal:
+        registrar_log("SAÍDA", preco, "Saiu do SHORT")
+        st.session_state.posicao = "LONG"
+        registrar_log("ENTRADA", preco, "Entrou em LONG")
+
+# =========================================
+# STATUS
+# =========================================
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("Ativo", ativo)
+
+with col2:
+    st.metric("Preço", f"${preco:.4f}")
+
+with col3:
+    st.metric("Sinal", sinal)
+
+st.info(f"Posição atual: {st.session_state.posicao}")
+
+# =========================================
+# TRADINGVIEW
+# =========================================
+st.write("📊 Gráfico")
+
+tv = f"""
 <div class="tradingview-widget-container">
-  <div id="tradingview_chart"></div>
-  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-  <script type="text/javascript">
-  new TradingView.widget({
+  <div id="tv_chart"></div>
+  <script src="https://s3.tradingview.com/tv.js"></script>
+  <script>
+  new TradingView.widget({{
     "width": "100%",
-    "height": 620,
-    "symbol": "BINANCE:AVAXUSDT",
+    "height": 600,
+    "symbol": "{symbol_tradingview}",
     "interval": "15",
-    "timezone": "Etc/UTC",
     "theme": "dark",
     "style": "1",
     "locale": "pt",
-    "toolbar_bg": "#0e1117",
-    "enable_publishing": false,
-    "hide_side_toolbar": false,
-    "allow_symbol_change": true,
-    "container_id": "tradingview_chart"
-  });
+    "container_id": "tv_chart"
+  }});
   </script>
 </div>
 """
 
-st.components.v1.html(tradingview_widget, height=670)
-
+st.components.v1.html(tv, height=650)
 
 # =========================================
-# LOGS NA TELA
+# LOGS
 # =========================================
-st.subheader("🧾 Logs do Bot")
+st.write("📜 Logs")
 
-if st.session_state.logs_operacoes:
-    df_logs = pd.DataFrame(st.session_state.logs_operacoes)
-    st.dataframe(df_logs, use_container_width=True, hide_index=True)
+if st.session_state.logs:
+    df = pd.DataFrame(st.session_state.logs)
+    st.dataframe(df, use_container_width=True)
 else:
-    st.info("Ainda não há logs.")
-
+    st.write("Sem logs ainda")
 
 # =========================================
-# RODAPÉ
+# FINAL
 # =========================================
-st.success("🎯 Monitoramento ativo")
-st.caption("Este app monitora enquanto a página estiver aberta. Para rodar 24h em segundo plano, será preciso usar um servidor/VPS.")
+st.success("Rodando automaticamente a cada 3 minutos")

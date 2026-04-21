@@ -2,8 +2,18 @@ import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="LuxAlgoClone", layout="wide", page_icon="📈")
+
+
+# =========================================
+# CONFIGURAÇÕES
+# =========================================
+REFRESH_MINUTOS = 1
+REFRESH_MS = REFRESH_MINUTOS * 60 * 1000
+MAX_RSI_LOGS = 60
+MAX_LOGS = 200
 
 
 # =========================================
@@ -44,27 +54,15 @@ st.markdown(
         color: white;
     }
 
-    .rsi-header {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin: 8px 0 6px 0;
-        color: white;
-        font-size: 1.05rem;
-    }
-
-    .rsi-header-title {
+    .rsi-title {
+        display: inline-block;
         background: #000000;
+        color: white;
+        font-weight: 800;
+        font-size: 1.05rem;
         padding: 2px 8px;
         border-radius: 2px;
-        display: inline-block;
-        line-height: 1.2;
-        font-weight: 800;
-    }
-
-    .rsi-header-value {
-        color: white;
-        font-weight: 500;
+        margin-bottom: 8px;
     }
 
     .rsi-box {
@@ -72,36 +70,15 @@ st.markdown(
         border-radius: 4px;
         min-height: 320px;
         padding: 12px;
-        position: relative;
+        color: #111111;
     }
 
-    .rsi-log-panel {
-        background: #000000;
-        color: white;
-        border-radius: 2px;
-        padding: 8px 10px;
-        width: fit-content;
-        min-width: 190px;
-        max-width: 95%;
-        font-size: 0.95rem;
-        line-height: 1.5;
-        font-weight: 700;
+    .rsi-list {
+        font-size: 1rem;
+        line-height: 1.6;
+        font-weight: 600;
         white-space: pre-wrap;
-    }
-
-    .rsi-green {
-        color: #21d07a;
-        font-weight: 800;
-    }
-
-    .rsi-yellow {
-        color: #ffd24d;
-        font-weight: 800;
-    }
-
-    .rsi-red {
-        color: #ff5b5b;
-        font-weight: 800;
+        color: #111111;
     }
     </style>
     """,
@@ -119,8 +96,14 @@ def inicializar_estado() -> None:
     if "token_confirmado" not in st.session_state:
         st.session_state.token_confirmado = "AVAX"
 
+    if "monitor_ativo" not in st.session_state:
+        st.session_state.monitor_ativo = False
+
     if "ultimo_preco" not in st.session_state:
         st.session_state.ultimo_preco = None
+
+    if "erro_tela" not in st.session_state:
+        st.session_state.erro_tela = ""
 
     if "rsi_15m" not in st.session_state:
         st.session_state.rsi_15m = None
@@ -131,8 +114,14 @@ def inicializar_estado() -> None:
     if "rsi_1w" not in st.session_state:
         st.session_state.rsi_1w = None
 
-    if "erro_tela" not in st.session_state:
-        st.session_state.erro_tela = ""
+    if "rsi_logs_15m" not in st.session_state:
+        st.session_state.rsi_logs_15m = []
+
+    if "rsi_logs_4h" not in st.session_state:
+        st.session_state.rsi_logs_4h = []
+
+    if "rsi_logs_1w" not in st.session_state:
+        st.session_state.rsi_logs_1w = []
 
     if "logs_bot" not in st.session_state:
         st.session_state.logs_bot = []
@@ -142,8 +131,29 @@ inicializar_estado()
 
 
 # =========================================
+# AUTO REFRESH
+# =========================================
+if st.session_state.monitor_ativo:
+    contador_refresh = st_autorefresh(interval=REFRESH_MS, key="refresh_1min")
+else:
+    contador_refresh = 0
+
+
+# =========================================
 # FUNÇÕES
 # =========================================
+def limpar_dados_visuais() -> None:
+    st.session_state.ultimo_preco = None
+    st.session_state.erro_tela = ""
+    st.session_state.rsi_15m = None
+    st.session_state.rsi_4h = None
+    st.session_state.rsi_1w = None
+    st.session_state.rsi_logs_15m = []
+    st.session_state.rsi_logs_4h = []
+    st.session_state.rsi_logs_1w = []
+    st.session_state.logs_bot = []
+
+
 def buscar_preco_okx(token: str) -> float:
     simbolo = f"{token}-USDT"
     url = "https://www.okx.com/api/v5/market/ticker"
@@ -224,36 +234,36 @@ def calcular_rsi(series: pd.Series, periodo: int = 14) -> float | None:
     return float(ultimo)
 
 
-def classe_rsi(valor: float | None) -> str:
-    if valor is None:
-        return "rsi-yellow"
-    if valor >= 55:
-        return "rsi-green"
-    if valor <= 45:
-        return "rsi-red"
-    return "rsi-yellow"
+def registrar_rsi_log(nome_lista: str, valor: float | None) -> None:
+    horario = datetime.now().strftime("%d/%m %H:%M")
+    valor_txt = "-" if valor is None else f"{valor:.2f}"
+    linha = f"{horario} | RSI {valor_txt}"
 
-
-def texto_rsi(valor: float | None) -> str:
-    return "-" if valor is None else f"{valor:.2f}"
+    lista = st.session_state[nome_lista]
+    if not lista or lista[0] != linha:
+        lista.insert(0, linha)
+        st.session_state[nome_lista] = lista[:MAX_RSI_LOGS]
 
 
 def registrar_log_simples(token: str, preco: float) -> None:
-    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-
-    if st.session_state.logs_bot:
-        ultimo = st.session_state.logs_bot[0]
-        if ultimo["Horário"] == agora and ultimo["Token"] == token:
-            return
-
+    horario = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     novo = {
-        "Horário": agora,
+        "Horário": horario,
         "Token": token,
         "Preço": round(preco, 6),
     }
 
+    if st.session_state.logs_bot:
+        ultimo = st.session_state.logs_bot[0]
+        if (
+            ultimo["Horário"] == novo["Horário"]
+            and ultimo["Token"] == novo["Token"]
+            and ultimo["Preço"] == novo["Preço"]
+        ):
+            return
+
     st.session_state.logs_bot.insert(0, novo)
-    st.session_state.logs_bot = st.session_state.logs_bot[:100]
+    st.session_state.logs_bot = st.session_state.logs_bot[:MAX_LOGS]
 
 
 def atualizar_tela(token: str) -> None:
@@ -263,13 +273,26 @@ def atualizar_tela(token: str) -> None:
     df_4h = buscar_candles_okx(token, "4H", 100)
     df_1w = buscar_candles_okx(token, "1W", 100)
 
+    rsi_15m = calcular_rsi(df_15m["close"], 14)
+    rsi_4h = calcular_rsi(df_4h["close"], 14)
+    rsi_1w = calcular_rsi(df_1w["close"], 14)
+
     st.session_state.ultimo_preco = preco
-    st.session_state.rsi_15m = calcular_rsi(df_15m["close"], 14)
-    st.session_state.rsi_4h = calcular_rsi(df_4h["close"], 14)
-    st.session_state.rsi_1w = calcular_rsi(df_1w["close"], 14)
+    st.session_state.rsi_15m = rsi_15m
+    st.session_state.rsi_4h = rsi_4h
+    st.session_state.rsi_1w = rsi_1w
     st.session_state.erro_tela = ""
 
+    registrar_rsi_log("rsi_logs_15m", rsi_15m)
+    registrar_rsi_log("rsi_logs_4h", rsi_4h)
+    registrar_rsi_log("rsi_logs_1w", rsi_1w)
     registrar_log_simples(token, preco)
+
+
+def montar_lista(lista: list[str]) -> str:
+    if not lista:
+        return "Sem dados ainda."
+    return "\n".join(lista[:12])
 
 
 # =========================================
@@ -282,7 +305,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-col_token_1, col_token_2 = st.columns([4, 1])
+col_token_1, col_token_2, col_token_3, col_token_4 = st.columns([4, 1, 1, 1])
 
 with col_token_1:
     token_digitado = st.text_input(
@@ -292,17 +315,44 @@ with col_token_1:
     ).strip().upper()
 
 with col_token_2:
+    confirmar = st.button("✅ Confirmar", use_container_width=True)
+
+with col_token_3:
+    parar = st.button("⛔ Parar monitor", use_container_width=True)
+
+with col_token_4:
     atualizar = st.button("🔄 Atualizar", use_container_width=True)
 
-if atualizar:
+if confirmar:
     if not token_digitado:
-        st.session_state.erro_tela = "Digite um token antes de atualizar."
+        st.session_state.erro_tela = "Digite um token antes de confirmar."
     else:
+        if token_digitado != st.session_state.token_confirmado:
+            limpar_dados_visuais()
         st.session_state.token_confirmado = token_digitado
+        st.session_state.monitor_ativo = True
         try:
             atualizar_tela(token_digitado)
         except Exception as e:
             st.session_state.erro_tela = str(e)
+        st.rerun()
+
+if parar:
+    st.session_state.monitor_ativo = False
+    st.rerun()
+
+if atualizar:
+    try:
+        atualizar_tela(st.session_state.token_confirmado)
+    except Exception as e:
+        st.session_state.erro_tela = str(e)
+    st.rerun()
+
+if st.session_state.monitor_ativo and contador_refresh > 0:
+    try:
+        atualizar_tela(st.session_state.token_confirmado)
+    except Exception as e:
+        st.session_state.erro_tela = str(e)
 
 ativo_atual = f"{st.session_state.token_confirmado}/USDT"
 
@@ -330,74 +380,38 @@ if st.session_state.erro_tela:
 
 
 # =========================================
-# JANELAS RSI
+# RSI
 # =========================================
 r1, r2, r3 = st.columns(3)
 
 with r1:
-    st.markdown(
-        f"""
-        <div class="rsi-header">
-            <span class="rsi-header-title">RSI 15 minutos</span>
-            <span class="rsi-header-value {classe_rsi(st.session_state.rsi_15m)}">
-                {texto_rsi(st.session_state.rsi_15m)}
-            </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="rsi-title">RSI 15 minutos</div>', unsafe_allow_html=True)
     st.markdown(
         f"""
         <div class="rsi-box">
-            <div class="rsi-log-panel">
-                Valor atual: {texto_rsi(st.session_state.rsi_15m)}
-            </div>
+            <div class="rsi-list">{montar_lista(st.session_state.rsi_logs_15m)}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 with r2:
-    st.markdown(
-        f"""
-        <div class="rsi-header">
-            <span class="rsi-header-title">RSI 4 horas</span>
-            <span class="rsi-header-value {classe_rsi(st.session_state.rsi_4h)}">
-                {texto_rsi(st.session_state.rsi_4h)}
-            </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="rsi-title">RSI 4 horas</div>', unsafe_allow_html=True)
     st.markdown(
         f"""
         <div class="rsi-box">
-            <div class="rsi-log-panel">
-                Valor atual: {texto_rsi(st.session_state.rsi_4h)}
-            </div>
+            <div class="rsi-list">{montar_lista(st.session_state.rsi_logs_4h)}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 with r3:
-    st.markdown(
-        f"""
-        <div class="rsi-header">
-            <span class="rsi-header-title">RSI Semanal</span>
-            <span class="rsi-header-value {classe_rsi(st.session_state.rsi_1w)}">
-                {texto_rsi(st.session_state.rsi_1w)}
-            </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="rsi-title">RSI Semanal</div>', unsafe_allow_html=True)
     st.markdown(
         f"""
         <div class="rsi-box">
-            <div class="rsi-log-panel">
-                Valor atual: {texto_rsi(st.session_state.rsi_1w)}
-            </div>
+            <div class="rsi-list">{montar_lista(st.session_state.rsi_logs_1w)}</div>
         </div>
         """,
         unsafe_allow_html=True,

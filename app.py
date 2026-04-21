@@ -54,18 +54,25 @@ st.markdown(
         color: white;
     }
 
-    .rsi-title {
+    .col-title {
         display: inline-block;
         background: #000000;
         color: white;
         font-weight: 800;
-        font-size: 1.05rem;
+        font-size: 1.02rem;
         padding: 2px 8px;
         border-radius: 2px;
         margin-bottom: 8px;
     }
 
-    .rsi-box {
+    .plain-title {
+        color: white;
+        font-weight: 700;
+        font-size: 1.02rem;
+        margin-bottom: 8px;
+    }
+
+    .data-box {
         background: #e9e9e9;
         border-radius: 4px;
         min-height: 320px;
@@ -73,7 +80,7 @@ st.markdown(
         color: #111111;
     }
 
-    .rsi-list {
+    .data-list {
         font-size: 1rem;
         line-height: 1.6;
         font-weight: 600;
@@ -114,6 +121,21 @@ def inicializar_estado() -> None:
     if "rsi_1w" not in st.session_state:
         st.session_state.rsi_1w = None
 
+    if "ema_20" not in st.session_state:
+        st.session_state.ema_20 = None
+
+    if "ema_50" not in st.session_state:
+        st.session_state.ema_50 = None
+
+    if "ema_200" not in st.session_state:
+        st.session_state.ema_200 = None
+
+    if "logs_datahora" not in st.session_state:
+        st.session_state.logs_datahora = []
+
+    if "logs_preco" not in st.session_state:
+        st.session_state.logs_preco = []
+
     if "rsi_logs_15m" not in st.session_state:
         st.session_state.rsi_logs_15m = []
 
@@ -148,6 +170,11 @@ def limpar_dados_visuais() -> None:
     st.session_state.rsi_15m = None
     st.session_state.rsi_4h = None
     st.session_state.rsi_1w = None
+    st.session_state.ema_20 = None
+    st.session_state.ema_50 = None
+    st.session_state.ema_200 = None
+    st.session_state.logs_datahora = []
+    st.session_state.logs_preco = []
     st.session_state.rsi_logs_15m = []
     st.session_state.rsi_logs_4h = []
     st.session_state.rsi_logs_1w = []
@@ -177,7 +204,7 @@ def buscar_preco_okx(token: str) -> float:
     return float(ultimo)
 
 
-def buscar_candles_okx(token: str, bar: str, limit: int = 100) -> pd.DataFrame:
+def buscar_candles_okx(token: str, bar: str, limit: int = 300) -> pd.DataFrame:
     simbolo = f"{token}-USDT"
     url = "https://www.okx.com/api/v5/market/candles"
     params = {
@@ -234,21 +261,28 @@ def calcular_rsi(series: pd.Series, periodo: int = 14) -> float | None:
     return float(ultimo)
 
 
-def registrar_rsi_log(nome_lista: str, valor: float | None) -> None:
-    horario = datetime.now().strftime("%d/%m %H:%M")
-    valor_txt = "-" if valor is None else f"{valor:.2f}"
-    linha = f"{horario} | RSI {valor_txt}"
+def calcular_ema(series: pd.Series, periodo: int) -> float | None:
+    series = pd.to_numeric(series, errors="coerce").dropna()
+    if len(series) < periodo:
+        return None
+    ema = series.ewm(span=periodo, adjust=False).mean()
+    ultimo = ema.iloc[-1]
+    if pd.isna(ultimo):
+        return None
+    return float(ultimo)
 
-    lista = st.session_state[nome_lista]
-    if not lista or lista[0] != linha:
-        lista.insert(0, linha)
-        st.session_state[nome_lista] = lista[:MAX_RSI_LOGS]
+
+def registrar_linha(lista_nome: str, texto: str) -> None:
+    lista = st.session_state[lista_nome]
+    if not lista or lista[0] != texto:
+        lista.insert(0, texto)
+        st.session_state[lista_nome] = lista[:MAX_RSI_LOGS]
 
 
 def registrar_log_simples(token: str, preco: float) -> None:
-    horario = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    horario_completo = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     novo = {
-        "Horário": horario,
+        "Horário": horario_completo,
         "Token": token,
         "Preço": round(preco, 6),
     }
@@ -269,23 +303,39 @@ def registrar_log_simples(token: str, preco: float) -> None:
 def atualizar_tela(token: str) -> None:
     preco = buscar_preco_okx(token)
 
-    df_15m = buscar_candles_okx(token, "15m", 100)
-    df_4h = buscar_candles_okx(token, "4H", 100)
-    df_1w = buscar_candles_okx(token, "1W", 100)
+    df_15m = buscar_candles_okx(token, "15m", 300)
+    df_4h = buscar_candles_okx(token, "4H", 300)
+    df_1w = buscar_candles_okx(token, "1W", 300)
 
     rsi_15m = calcular_rsi(df_15m["close"], 14)
     rsi_4h = calcular_rsi(df_4h["close"], 14)
     rsi_1w = calcular_rsi(df_1w["close"], 14)
 
+    ema_20 = calcular_ema(df_15m["close"], 20)
+    ema_50 = calcular_ema(df_15m["close"], 50)
+    ema_200 = calcular_ema(df_15m["close"], 200)
+
     st.session_state.ultimo_preco = preco
     st.session_state.rsi_15m = rsi_15m
     st.session_state.rsi_4h = rsi_4h
     st.session_state.rsi_1w = rsi_1w
+    st.session_state.ema_20 = ema_20
+    st.session_state.ema_50 = ema_50
+    st.session_state.ema_200 = ema_200
     st.session_state.erro_tela = ""
 
-    registrar_rsi_log("rsi_logs_15m", rsi_15m)
-    registrar_rsi_log("rsi_logs_4h", rsi_4h)
-    registrar_rsi_log("rsi_logs_1w", rsi_1w)
+    horario_curto = datetime.now().strftime("%d/%m %H:%M")
+    preco_txt = "-" if preco is None else f"{preco:.6f}"
+    rsi15_txt = "-" if rsi_15m is None else f"RSI {rsi_15m:.2f}"
+    rsi4h_txt = "-" if rsi_4h is None else f"RSI {rsi_4h:.2f}"
+    rsi1w_txt = "-" if rsi_1w is None else f"RSI {rsi_1w:.2f}"
+
+    registrar_linha("logs_datahora", horario_curto)
+    registrar_linha("logs_preco", preco_txt)
+    registrar_linha("rsi_logs_15m", rsi15_txt)
+    registrar_linha("rsi_logs_4h", rsi4h_txt)
+    registrar_linha("rsi_logs_1w", rsi1w_txt)
+
     registrar_log_simples(token, preco)
 
 
@@ -295,13 +345,19 @@ def montar_lista(lista: list[str]) -> str:
     return "\n".join(lista[:12])
 
 
+def fmt_num(valor: float | None, casas: int = 2) -> str:
+    if valor is None:
+        return "-"
+    return f"{valor:.{casas}f}"
+
+
 # =========================================
 # TOPO
 # =========================================
 st.markdown('<div class="top-card">', unsafe_allow_html=True)
 st.markdown('<div class="top-title">🤖 LuxAlgoClone Monitor</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="top-subtitle">Somente exibição visual: gráfico, RSI e log simples.</div>',
+    '<div class="top-subtitle">Somente exibição visual: gráfico, RSI, EMAs e log simples.</div>',
     unsafe_allow_html=True,
 )
 
@@ -356,7 +412,7 @@ if st.session_state.monitor_ativo and contador_refresh > 0:
 
 ativo_atual = f"{st.session_state.token_confirmado}/USDT"
 
-m1, m2 = st.columns(2)
+m1, m2, m3, m4, m5 = st.columns(5)
 
 with m1:
     st.markdown('<div class="metric-label">Ativo</div>', unsafe_allow_html=True)
@@ -369,6 +425,18 @@ with m2:
     st.markdown('<div class="metric-label">Último valor</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="metric-value">{ultimo_preco_txt}</div>', unsafe_allow_html=True)
 
+with m3:
+    st.markdown('<div class="metric-label">EMA 20</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-value">{fmt_num(st.session_state.ema_20, 6)}</div>', unsafe_allow_html=True)
+
+with m4:
+    st.markdown('<div class="metric-label">EMA 50</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-value">{fmt_num(st.session_state.ema_50, 6)}</div>', unsafe_allow_html=True)
+
+with m5:
+    st.markdown('<div class="metric-label">EMA 200</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-value">{fmt_num(st.session_state.ema_200, 6)}</div>', unsafe_allow_html=True)
+
 st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -380,38 +448,60 @@ if st.session_state.erro_tela:
 
 
 # =========================================
-# RSI
+# TABELAS VISUAIS
 # =========================================
-r1, r2, r3 = st.columns(3)
+c1, c2, c3, c4, c5 = st.columns(5)
 
-with r1:
-    st.markdown('<div class="rsi-title">RSI 15 minutos</div>', unsafe_allow_html=True)
+with c1:
+    st.markdown('<div class="plain-title">hora</div>', unsafe_allow_html=True)
     st.markdown(
         f"""
-        <div class="rsi-box">
-            <div class="rsi-list">{montar_lista(st.session_state.rsi_logs_15m)}</div>
+        <div class="data-box">
+            <div class="data-list">{montar_lista(st.session_state.logs_datahora)}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-with r2:
-    st.markdown('<div class="rsi-title">RSI 4 horas</div>', unsafe_allow_html=True)
+with c2:
+    st.markdown('<div class="plain-title">valor</div>', unsafe_allow_html=True)
     st.markdown(
         f"""
-        <div class="rsi-box">
-            <div class="rsi-list">{montar_lista(st.session_state.rsi_logs_4h)}</div>
+        <div class="data-box">
+            <div class="data-list">{montar_lista(st.session_state.logs_preco)}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-with r3:
-    st.markdown('<div class="rsi-title">RSI Semanal</div>', unsafe_allow_html=True)
+with c3:
+    st.markdown('<div class="col-title">RSI 15 minutos</div>', unsafe_allow_html=True)
     st.markdown(
         f"""
-        <div class="rsi-box">
-            <div class="rsi-list">{montar_lista(st.session_state.rsi_logs_1w)}</div>
+        <div class="data-box">
+            <div class="data-list">{montar_lista(st.session_state.rsi_logs_15m)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with c4:
+    st.markdown('<div class="col-title">RSI 4 horas</div>', unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="data-box">
+            <div class="data-list">{montar_lista(st.session_state.rsi_logs_4h)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with c5:
+    st.markdown('<div class="col-title">RSI Semanal</div>', unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="data-box">
+            <div class="data-list">{montar_lista(st.session_state.rsi_logs_1w)}</div>
         </div>
         """,
         unsafe_allow_html=True,

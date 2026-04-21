@@ -6,6 +6,7 @@ from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="LuxAlgoClone", layout="wide", page_icon="📈")
 
+
 # =========================================
 # CONFIGURAÇÕES
 # =========================================
@@ -13,6 +14,69 @@ REFRESH_MINUTOS = 3
 REFRESH_MS = REFRESH_MINUTOS * 60 * 1000
 MAX_HISTORICO = 50
 MAX_LOGS = 300
+MAX_RSI_LOGS = 50
+
+
+# =========================================
+# ESTILO
+# =========================================
+st.markdown(
+    """
+    <style>
+    .top-card {
+        background: #07111f;
+        border-radius: 10px;
+        padding: 18px 18px 8px 18px;
+        margin-bottom: 18px;
+    }
+    .top-title {
+        font-size: 2.2rem;
+        font-weight: 800;
+        color: white;
+        margin-bottom: 8px;
+    }
+    .top-subtitle {
+        font-size: 0.95rem;
+        color: #b7c2d0;
+        margin-bottom: 18px;
+    }
+    .metric-label {
+        font-size: 0.85rem;
+        color: #c3cede;
+        margin-bottom: 4px;
+    }
+    .metric-value {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: white;
+    }
+    .rsi-box {
+        background: #f3f3f3;
+        color: #111;
+        border-radius: 4px;
+        padding: 14px 16px;
+        min-height: 320px;
+    }
+    .rsi-title {
+        font-size: 1.15rem;
+        font-weight: 700;
+        margin-bottom: 10px;
+    }
+    .rsi-current {
+        font-size: 1.05rem;
+        font-weight: 700;
+        margin-bottom: 10px;
+    }
+    .rsi-list {
+        font-size: 0.95rem;
+        line-height: 1.45;
+        white-space: pre-wrap;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 # =========================================
 # ESTADO INICIAL
@@ -51,20 +115,39 @@ def inicializar_estado() -> None:
     if "token_input_widget" not in st.session_state:
         st.session_state.token_input_widget = "AVAX"
 
+    if "rsi_logs_15m" not in st.session_state:
+        st.session_state.rsi_logs_15m = []
+
+    if "rsi_logs_4h" not in st.session_state:
+        st.session_state.rsi_logs_4h = []
+
+    if "rsi_logs_1w" not in st.session_state:
+        st.session_state.rsi_logs_1w = []
+
+    if "rsi_atual_15m" not in st.session_state:
+        st.session_state.rsi_atual_15m = None
+
+    if "rsi_atual_4h" not in st.session_state:
+        st.session_state.rsi_atual_4h = None
+
+    if "rsi_atual_1w" not in st.session_state:
+        st.session_state.rsi_atual_1w = None
+
 
 inicializar_estado()
 
+
 # =========================================
 # AUTO-REFRESH
-# Só atualiza automaticamente se o monitor estiver ativo
 # =========================================
 if st.session_state.monitor_ativo:
     contador_refresh = st_autorefresh(interval=REFRESH_MS, key="monitor_refresh")
 else:
     contador_refresh = 0
 
+
 # =========================================
-# FUNÇÕES
+# FUNÇÕES AUXILIARES
 # =========================================
 def limpar_monitoramento() -> None:
     st.session_state.historico = []
@@ -75,6 +158,12 @@ def limpar_monitoramento() -> None:
     st.session_state.ultimo_sinal = "AGUARDANDO"
     st.session_state.ultima_acao = "Nenhuma"
     st.session_state.erro_monitoramento = ""
+    st.session_state.rsi_logs_15m = []
+    st.session_state.rsi_logs_4h = []
+    st.session_state.rsi_logs_1w = []
+    st.session_state.rsi_atual_15m = None
+    st.session_state.rsi_atual_4h = None
+    st.session_state.rsi_atual_1w = None
 
 
 def registrar_log(acao: str, preco: float, detalhe: str) -> None:
@@ -91,11 +180,27 @@ def registrar_log(acao: str, preco: float, detalhe: str) -> None:
     st.session_state.logs = st.session_state.logs[:MAX_LOGS]
 
 
+def registrar_rsi_log(janela: str, valor: float | None) -> None:
+    agora = datetime.now().strftime("%d/%m %H:%M")
+    texto_valor = "-" if valor is None else f"{valor:.2f}"
+
+    linha = {
+        "horario": agora,
+        "valor": texto_valor,
+    }
+
+    if janela == "15m":
+        st.session_state.rsi_logs_15m.insert(0, linha)
+        st.session_state.rsi_logs_15m = st.session_state.rsi_logs_15m[:MAX_RSI_LOGS]
+    elif janela == "4h":
+        st.session_state.rsi_logs_4h.insert(0, linha)
+        st.session_state.rsi_logs_4h = st.session_state.rsi_logs_4h[:MAX_RSI_LOGS]
+    elif janela == "1w":
+        st.session_state.rsi_logs_1w.insert(0, linha)
+        st.session_state.rsi_logs_1w = st.session_state.rsi_logs_1w[:MAX_RSI_LOGS]
+
+
 def buscar_preco_okx(token: str) -> float:
-    """
-    Busca o último preço em USDT na OKX.
-    Exemplo de símbolo: AVAX-USDT
-    """
     simbolo = f"{token}-USDT"
     url = "https://www.okx.com/api/v5/market/ticker"
     params = {"instId": simbolo}
@@ -115,6 +220,64 @@ def buscar_preco_okx(token: str) -> float:
     ultimo = lista[0].get("last")
     if ultimo is None:
         raise Exception(f"Preço não retornado para {token}/USDT.")
+
+    return float(ultimo)
+
+
+def buscar_candles_okx(token: str, bar: str, limit: int = 100) -> pd.DataFrame:
+    simbolo = f"{token}-USDT"
+    url = "https://www.okx.com/api/v5/market/candles"
+    params = {
+        "instId": simbolo,
+        "bar": bar,
+        "limit": str(limit),
+    }
+
+    resposta = requests.get(url, params=params, timeout=20)
+    resposta.raise_for_status()
+
+    dados = resposta.json()
+
+    if dados.get("code") != "0":
+        raise Exception(f"Falha ao buscar candles {bar}: {dados}")
+
+    lista = dados.get("data", [])
+    if not lista:
+        raise Exception(f"Sem candles para {token}/USDT em {bar}.")
+
+    df = pd.DataFrame(
+        lista,
+        columns=[
+            "ts", "open", "high", "low", "close", "vol",
+            "volCcy", "volCcyQuote", "confirm"
+        ],
+    )
+
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df["ts"] = pd.to_datetime(pd.to_numeric(df["ts"]), unit="ms")
+    df = df.sort_values("ts").reset_index(drop=True)
+    return df
+
+
+def calcular_rsi(series: pd.Series, periodo: int = 14) -> float | None:
+    series = pd.to_numeric(series, errors="coerce").dropna()
+
+    if len(series) < periodo + 1:
+        return None
+
+    delta = series.diff()
+    ganho = delta.clip(lower=0)
+    perda = -delta.clip(upper=0)
+
+    media_ganho = ganho.ewm(alpha=1 / periodo, adjust=False).mean()
+    media_perda = perda.ewm(alpha=1 / periodo, adjust=False).mean()
+
+    rs = media_ganho / media_perda.replace(0, pd.NA)
+    rsi = 100 - (100 / (1 + rs))
+    ultimo = rsi.iloc[-1]
+
+    if pd.isna(ultimo):
+        return None
 
     return float(ultimo)
 
@@ -145,6 +308,24 @@ def calcular_sinal() -> tuple[str, float | None, float | None]:
     return "AGUARDANDO", media_curta, media_longa
 
 
+def atualizar_rsis(token: str) -> None:
+    df_15m = buscar_candles_okx(token, "15m", 100)
+    df_4h = buscar_candles_okx(token, "4H", 100)
+    df_1w = buscar_candles_okx(token, "1W", 100)
+
+    rsi_15m = calcular_rsi(df_15m["close"], 14)
+    rsi_4h = calcular_rsi(df_4h["close"], 14)
+    rsi_1w = calcular_rsi(df_1w["close"], 14)
+
+    st.session_state.rsi_atual_15m = rsi_15m
+    st.session_state.rsi_atual_4h = rsi_4h
+    st.session_state.rsi_atual_1w = rsi_1w
+
+    registrar_rsi_log("15m", rsi_15m)
+    registrar_rsi_log("4h", rsi_4h)
+    registrar_rsi_log("1w", rsi_1w)
+
+
 def processar_monitoramento() -> None:
     token = st.session_state.token_confirmado
 
@@ -154,6 +335,7 @@ def processar_monitoramento() -> None:
     try:
         preco = buscar_preco_okx(token)
         adicionar_historico(preco)
+        atualizar_rsis(token)
 
         st.session_state.ultimo_preco = preco
         st.session_state.ultimo_update = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
@@ -206,16 +388,25 @@ def processar_monitoramento() -> None:
         registrar_log("ERRO", preco_log, f"Falha no monitoramento: {e}")
 
 
-# =========================================
-# CABEÇALHO
-# =========================================
-st.title("🤖 LuxAlgoClone Monitor")
-st.caption("Escolha o token e confirme. O monitoramento só começa depois da confirmação.")
+def formatar_lista_rsi(lista: list[dict]) -> str:
+    if not lista:
+        return "Sem leituras ainda."
+
+    linhas = [f"{item['horario']}  |  RSI {item['valor']}" for item in lista[:12]]
+    return "\n".join(linhas)
+
 
 # =========================================
-# ESCOLHA DO TOKEN
+# CABEÇALHO / INÍCIO NO NOVO LAYOUT
 # =========================================
-col_token_1, col_token_2, col_token_3 = st.columns([3, 1, 1])
+st.markdown('<div class="top-card">', unsafe_allow_html=True)
+st.markdown('<div class="top-title">🤖 LuxAlgoClone Monitor</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="top-subtitle">Escolha o token e confirme. O monitoramento só começa depois da confirmação.</div>',
+    unsafe_allow_html=True,
+)
+
+col_token_1, col_token_2, col_token_3, col_token_4 = st.columns([4, 1, 1, 1])
 
 with col_token_1:
     token_digitado = st.text_input(
@@ -225,10 +416,13 @@ with col_token_1:
     ).strip().upper()
 
 with col_token_2:
-    confirmar = st.button("✅ Confirmar token", use_container_width=True)
+    confirmar = st.button("✅ Confirmar", use_container_width=True)
 
 with col_token_3:
     parar = st.button("⛔ Parar monitor", use_container_width=True)
+
+with col_token_4:
+    atualizar_agora = st.button("🔄 Atualizar", use_container_width=True)
 
 if confirmar:
     if not token_digitado:
@@ -248,60 +442,86 @@ if parar:
     st.session_state.ultima_acao = "Monitoramento pausado"
     st.rerun()
 
-token_confirmado = st.session_state.token_confirmado
-ativo_atual = f"{token_confirmado}/USDT" if token_confirmado else "-"
-
-# =========================================
-# BOTÃO MANUAL
-# =========================================
-col_botao_1, col_botao_2 = st.columns([1, 4])
-
-with col_botao_1:
-    atualizar_agora = st.button("🔄 Atualizar agora", use_container_width=True)
-
-with col_botao_2:
-    st.caption("Use este botão para forçar uma nova leitura sem esperar os 3 minutos.")
-
-if atualizar_agora and st.session_state.monitor_ativo and token_confirmado:
+if atualizar_agora and st.session_state.monitor_ativo and st.session_state.token_confirmado:
     processar_monitoramento()
     st.rerun()
 
-# =========================================
-# EXECUÇÃO AUTOMÁTICA
-# =========================================
-if st.session_state.monitor_ativo and token_confirmado and contador_refresh > 0:
+if st.session_state.monitor_ativo and st.session_state.token_confirmado and contador_refresh > 0:
     processar_monitoramento()
 
-# =========================================
-# STATUS SUPERIOR
-# =========================================
-c1, c2, c3, c4 = st.columns(4)
+ativo_atual = f"{st.session_state.token_confirmado}/USDT" if st.session_state.token_confirmado else "-"
 
-with c1:
-    st.metric("Ativo", ativo_atual)
+m1, m2, m3, m4 = st.columns(4)
 
-with c2:
-    preco_fmt = "-"
+with m1:
+    st.markdown('<div class="metric-label">Ativo</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-value">{ativo_atual}</div>', unsafe_allow_html=True)
+
+with m2:
+    ultimo_preco_txt = "-"
     if st.session_state.ultimo_preco is not None:
-        preco_fmt = f"${st.session_state.ultimo_preco:,.6f}"
-    st.metric("Último valor", preco_fmt)
+        ultimo_preco_txt = f"${st.session_state.ultimo_preco:,.6f}"
+    st.markdown('<div class="metric-label">Último valor</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-value">{ultimo_preco_txt}</div>', unsafe_allow_html=True)
 
-with c3:
-    st.metric("Sinal atual", st.session_state.ultimo_sinal)
+with m3:
+    st.markdown('<div class="metric-label">Sinal atual</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-value">{st.session_state.ultimo_sinal}</div>', unsafe_allow_html=True)
 
-with c4:
+with m4:
     status_bot = "ATIVO" if st.session_state.monitor_ativo else "PARADO"
-    st.metric("Status do bot", status_bot)
+    st.markdown('<div class="metric-label">Status do bot</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-value">{status_bot}</div>', unsafe_allow_html=True)
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# =========================================
+# JANELAS DE RSI
+# =========================================
+r1, r2, r3 = st.columns(3)
+
+with r1:
+    st.markdown('<div class="rsi-box">', unsafe_allow_html=True)
+    st.markdown('<div class="rsi-title">Janela 01</div>', unsafe_allow_html=True)
+    valor_15 = "-" if st.session_state.rsi_atual_15m is None else f"{st.session_state.rsi_atual_15m:.2f}"
+    st.markdown(f'<div class="rsi-current">RSI 15 minutos: {valor_15}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="rsi-list">{formatar_lista_rsi(st.session_state.rsi_logs_15m)}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with r2:
+    st.markdown('<div class="rsi-box">', unsafe_allow_html=True)
+    st.markdown('<div class="rsi-title">Janela 02</div>', unsafe_allow_html=True)
+    valor_4h = "-" if st.session_state.rsi_atual_4h is None else f"{st.session_state.rsi_atual_4h:.2f}"
+    st.markdown(f'<div class="rsi-current">RSI 4 horas: {valor_4h}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="rsi-list">{formatar_lista_rsi(st.session_state.rsi_logs_4h)}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with r3:
+    st.markdown('<div class="rsi-box">', unsafe_allow_html=True)
+    st.markdown('<div class="rsi-title">Janela 03</div>', unsafe_allow_html=True)
+    valor_1w = "-" if st.session_state.rsi_atual_1w is None else f"{st.session_state.rsi_atual_1w:.2f}"
+    st.markdown(f'<div class="rsi-current">RSI 1 semana: {valor_1w}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="rsi-list">{formatar_lista_rsi(st.session_state.rsi_logs_1w)}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================================
 # STATUS DO MONITOR
 # =========================================
 st.subheader("📋 Status do Monitor")
 
-if not token_confirmado:
-    st.warning("Digite o token e clique em 'Confirmar token' para iniciar o monitoramento.")
+if not st.session_state.token_confirmado:
+    st.warning("Digite o token e clique em 'Confirmar' para iniciar o monitoramento.")
 else:
-    st.info(f"Token escolhido: {token_confirmado}/USDT")
+    st.info(f"Token escolhido: {st.session_state.token_confirmado}/USDT")
 
 if st.session_state.erro_monitoramento:
     st.error(f"Erro no monitoramento: {st.session_state.erro_monitoramento}")
@@ -323,8 +543,8 @@ st.info(f"📍 Posição atual: {st.session_state.posicao}")
 # =========================================
 st.subheader("📊 Gráfico TradingView")
 
-if token_confirmado:
-    tradingview_symbol = f"BINANCE:{token_confirmado}USDT"
+if st.session_state.token_confirmado:
+    tradingview_symbol = f"BINANCE:{st.session_state.token_confirmado}USDT"
 
     tradingview_widget = f"""
     <div class="tradingview-widget-container">
